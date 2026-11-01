@@ -1,0 +1,12 @@
+{
+  "name": "applaunch",
+  "version": "1.0.0",
+  "description": "Official CLI for AppLaunch — Open-Source Mobile App Deployment & APK Distribution",
+  "bin": {
+    "applaunch": "./bin/applaunch.js"
+  },
+  "keywords": ["applaunch", "android", "apk", "deployment", "distribution", "expo-alternative", "mobile"],
+  "author": "AppLaunch Team",
+  "license": "Apache-2.0",
+  "dependencies": {}
+}
