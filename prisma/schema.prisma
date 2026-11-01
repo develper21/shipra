@@ -1,0 +1,946 @@
+// ===================================================
+// AppLaunch: Complete PostgreSQL Database Schema (Prisma)
+// ===================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------
+// Enums
+// ---------------------------------------------------
+
+enum UserRole {
+  user
+  admin
+}
+
+enum UserStatus {
+  active
+  suspended
+  banned
+}
+
+enum WorkspaceType {
+  personal
+  team
+}
+
+enum MemberRole {
+  owner
+  admin
+  developer
+  viewer
+}
+
+enum AppVisibility {
+  public
+  unlisted
+  private
+}
+
+enum AppStatus {
+  active
+  archived
+  suspended
+}
+
+enum BuildStatus {
+  uploading
+  processing
+  scanning
+  ready
+  failed
+  blocked
+}
+
+enum ScanEngine {
+  clamav
+  virustotal
+}
+
+enum ScanVerdict {
+  clean
+  suspicious
+  malicious
+}
+
+enum LinkType {
+  build
+  latest
+}
+
+enum TesterStatus {
+  invited
+  active
+  revoked
+}
+
+enum CloudBuildStatus {
+  queued
+  building
+  success
+  failed
+  cancelled
+}
+
+enum SubscriptionStatus {
+  active
+  trialing
+  past_due
+  canceled
+  incomplete
+}
+
+enum PaymentProvider {
+  stripe
+  razorpay
+}
+
+enum AbuseReportStatus {
+  pending
+  reviewing
+  resolved
+  dismissed
+}
+
+enum DmcaStatus {
+  pending
+  reviewing
+  takedown
+  rejected
+}
+
+enum BlocklistType {
+  package
+  apk_hash
+  email
+  domain
+  ip
+}
+
+enum TicketStatus {
+  open
+  pending
+  closed
+}
+
+// ---------------------------------------------------
+// Auth & Identity
+// ---------------------------------------------------
+
+model User {
+  id               String       @id @default(uuid())
+  email            String       @unique
+  passwordHash     String?
+  name             String
+  username         String       @unique
+  avatarUrl        String?
+  bio              String?
+  website          String?
+  emailVerifiedAt  DateTime?
+  status           UserStatus   @default(active)
+  role             UserRole     @default(user)
+  locale           String       @default("en")
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  oauthAccounts    OAuthAccount[]
+  sessions         Session[]
+  twoFactor        TwoFactor?
+  backupCodes      BackupCode[]
+  emailOtps        EmailOtp[]
+  memberships      Membership[]
+  ownedWorkspaces  Workspace[]  @relation("WorkspaceOwner")
+  apiTokens        ApiToken[]
+  notifications    Notification[]
+  notificationPrefs NotificationPref[]
+  supportTickets   SupportTicket[]
+  testers          Tester[]
+
+  @@index([email])
+  @@index([username])
+}
+
+model OAuthAccount {
+  id                String   @id @default(uuid())
+  userId            String
+  provider          String   // "google" | "github"
+  providerAccountId String
+  createdAt         DateTime @default(now())
+
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  userId       String
+  tokenHash    String   @unique
+  ipHash       String?
+  userAgent    String?
+  lastActiveAt DateTime @default(now())
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tokenHash])
+}
+
+model TwoFactor {
+  id              String    @id @default(uuid())
+  userId          String    @unique
+  secretEncrypted String
+  enabledAt       DateTime?
+  createdAt       DateTime  @default(now())
+
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model BackupCode {
+  id        String    @id @default(uuid())
+  userId    String
+  codeHash  String
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model EmailOtp {
+  id        String   @id @default(uuid())
+  userId    String?
+  email     String
+  purpose   String   // "signup" | "login" | "reset_password" | "change_email"
+  codeHash  String
+  expiresAt DateTime
+  attempts  Int      @default(0)
+  createdAt DateTime @default(now())
+
+  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([email, purpose])
+}
+
+// ---------------------------------------------------
+// Workspaces & Teams
+// ---------------------------------------------------
+
+model Workspace {
+  id           String        @id @default(uuid())
+  name         String
+  slug         String        @unique
+  type         WorkspaceType @default(personal)
+  ownerId      String
+  planId       String        @default("free")
+  logoUrl      String?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  owner        User          @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  plan         Plan          @relation(fields: [planId], references: [id])
+  memberships  Membership[]
+  invites      Invite[]
+  apps         App[]
+  apiTokens    ApiToken[]
+  webhooks     Webhook[]
+  integrations Integration[]
+  subscription Subscription?
+  invoices     Invoice[]
+  billingDetail BillingDetail?
+  usageRecords UsageRecord[]
+  auditLogs    AuditLog[]
+
+  @@index([slug])
+  @@index([ownerId])
+}
+
+model Membership {
+  id          String     @id @default(uuid())
+  workspaceId String
+  userId      String
+  role        MemberRole @default(developer)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  workspace   Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@index([workspaceId])
+  @@index([userId])
+}
+
+model Invite {
+  id          String     @id @default(uuid())
+  workspaceId String
+  email       String
+  role        MemberRole @default(developer)
+  tokenHash   String     @unique
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  createdAt   DateTime   @default(now())
+
+  workspace   Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([tokenHash])
+}
+
+// ---------------------------------------------------
+// Apps & Builds
+// ---------------------------------------------------
+
+model App {
+  id             String        @id @default(uuid())
+  workspaceId    String
+  name           String
+  packageName    String
+  slug           String        @unique
+  description    String?
+  iconKey        String?
+  visibility     AppVisibility @default(public)
+  status         AppStatus     @default(active)
+  developerUrl   String?
+  privacyUrl     String?
+  supportEmail   String?
+  deletedAt      DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  workspace      Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  screenshots    AppScreenshot[]
+  builds         Build[]
+  channels       Channel[]
+  shareLinks     ShareLink[]
+  testers        Tester[]
+  testerGroups   TesterGroup[]
+  betaSignups    BetaSignup[]
+  pageViews      PageView[]
+  cloudBuilds    CloudBuild[]
+  buildEnvVars   BuildEnvVar[]
+  keystores      Keystore[]
+  abuseReports   AbuseReport[]
+  dmcaRequests   DmcaRequest[]
+
+  @@index([workspaceId])
+  @@index([slug])
+  @@index([packageName])
+  @@index([deletedAt])
+}
+
+model AppScreenshot {
+  id         String   @id @default(uuid())
+  appId      String
+  storageKey String
+  position   Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  app        App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+
+  @@index([appId])
+}
+
+model Build {
+  id             String       @id @default(uuid())
+  appId          String
+  versionName    String
+  versionCode    Int
+  minSdk         Int          @default(21)
+  targetSdk      Int          @default(34)
+  abis           Json?        // string[] e.g. ["arm64-v8a", "armeabi-v7a"]
+  permissions    Json?        // string[] permissions list
+  certSha256     String?
+  isDebugSigned  Boolean      @default(false)
+  sizeBytes      BigInt
+  sha256         String
+  storageKey     String
+  status         BuildStatus  @default(uploading)
+  releaseNotes   String?
+  publishedAt    DateTime?
+  deletedAt      DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  app            App          @relation(fields: [appId], references: [id], onDelete: Cascade)
+  scanResults    ScanResult[]
+  shareLinks     ShareLink[]
+  feedbacks      TesterFeedback[]
+  downloadEvents DownloadEvent[]
+  channelHistory ChannelHistory[]
+
+  @@unique([appId, versionCode])
+  @@index([appId, createdAt])
+  @@index([status])
+}
+
+model Channel {
+  id             String           @id @default(uuid())
+  appId          String
+  name           String           // "production" | "beta" | "internal" | custom
+  currentBuildId String?
+  rolloutPercent Int              @default(100)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  app            App              @relation(fields: [appId], references: [id], onDelete: Cascade)
+  history        ChannelHistory[]
+
+  @@unique([appId, name])
+  @@index([appId])
+}
+
+model ChannelHistory {
+  id        String   @id @default(uuid())
+  channelId String
+  buildId   String
+  action    String   // "promote" | "rollback"
+  byUserId  String?
+  createdAt DateTime @default(now())
+
+  channel   Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  build     Build    @relation(fields: [buildId], references: [id], onDelete: Cascade)
+
+  @@index([channelId])
+  @@index([buildId])
+}
+
+model ScanResult {
+  id        String      @id @default(uuid())
+  buildId   String
+  engine    ScanEngine
+  verdict   ScanVerdict @default(clean)
+  details   Json?
+  scannedAt DateTime    @default(now())
+
+  build     Build       @relation(fields: [buildId], references: [id], onDelete: Cascade)
+
+  @@index([buildId])
+}
+
+// ---------------------------------------------------
+// Sharing & Distribution
+// ---------------------------------------------------
+
+model ShareLink {
+  id            String          @id @default(uuid())
+  appId         String
+  buildId       String?
+  token         String          @unique
+  type          LinkType        @default(build)
+  passwordHash  String?
+  expiresAt     DateTime?
+  maxDownloads  Int?
+  downloadCount Int             @default(0)
+  requiresLogin Boolean         @default(false)
+  allowedEmails Json?           // string[]
+  revokedAt     DateTime?
+  createdAt     DateTime        @default(now())
+
+  app           App             @relation(fields: [appId], references: [id], onDelete: Cascade)
+  build         Build?          @relation(fields: [buildId], references: [id], onDelete: SetNull)
+  downloads     DownloadEvent[]
+
+  @@index([token])
+  @@index([appId])
+  @@index([buildId])
+}
+
+model Tester {
+  id           String              @id @default(uuid())
+  appId        String
+  email        String
+  userId       String?
+  status       TesterStatus        @default(invited)
+  createdAt    DateTime            @default(now())
+
+  app          App                 @relation(fields: [appId], references: [id], onDelete: Cascade)
+  user         User?               @relation(fields: [userId], references: [id], onDelete: SetNull)
+  groupMembers TesterGroupMember[]
+  feedbacks    TesterFeedback[]
+
+  @@unique([appId, email])
+  @@index([appId])
+  @@index([userId])
+}
+
+model TesterGroup {
+  id        String              @id @default(uuid())
+  appId     String
+  name      String              // e.g. "QA", "Beta", "VIP", "Internal"
+  createdAt DateTime            @default(now())
+
+  app       App                 @relation(fields: [appId], references: [id], onDelete: Cascade)
+  members   TesterGroupMember[]
+
+  @@index([appId])
+}
+
+model TesterGroupMember {
+  id        String      @id @default(uuid())
+  groupId   String
+  testerId  String
+  createdAt DateTime    @default(now())
+
+  group     TesterGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  tester    Tester      @relation(fields: [testerId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, testerId])
+  @@index([groupId])
+  @@index([testerId])
+}
+
+model TesterFeedback {
+  id            String   @id @default(uuid())
+  buildId       String
+  testerId      String?
+  rating        Int?     // 1 to 5
+  comment       String
+  screenshotKey String?
+  createdAt     DateTime @default(now())
+
+  build         Build    @relation(fields: [buildId], references: [id], onDelete: Cascade)
+  tester        Tester?  @relation(fields: [testerId], references: [id], onDelete: SetNull)
+
+  @@index([buildId])
+}
+
+model BetaSignup {
+  id        String   @id @default(uuid())
+  appId     String
+  email     String
+  name      String?
+  status    String   @default("pending") // "pending" | "approved" | "rejected"
+  createdAt DateTime @default(now())
+
+  app       App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+
+  @@unique([appId, email])
+  @@index([appId])
+}
+
+// ---------------------------------------------------
+// Analytics & Logging (Partition-ready)
+// ---------------------------------------------------
+
+model DownloadEvent {
+  id             String     @id @default(uuid())
+  linkId         String?
+  buildId        String
+  ipHash         String
+  country        String?
+  deviceModel    String?
+  androidVersion String?
+  source         String?
+  isBot          Boolean    @default(false)
+  createdAt      DateTime   @default(now())
+
+  link           ShareLink? @relation(fields: [linkId], references: [id], onDelete: SetNull)
+  build          Build      @relation(fields: [buildId], references: [id], onDelete: Cascade)
+
+  @@index([buildId, createdAt])
+  @@index([linkId])
+  @@index([country])
+}
+
+model PageView {
+  id        String   @id @default(uuid())
+  appId     String
+  ipHash    String
+  referrer  String?
+  country   String?
+  createdAt DateTime @default(now())
+
+  app       App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+
+  @@index([appId, createdAt])
+}
+
+// ---------------------------------------------------
+// Developer Tools & Integrations
+// ---------------------------------------------------
+
+model ApiToken {
+  id          String    @id @default(uuid())
+  workspaceId String
+  userId      String
+  name        String
+  tokenHash   String    @unique
+  prefix      String    // e.g. "apl_live_9a7b"
+  scopes      Json      // string[] e.g. ["builds:write", "apps:read"]
+  lastUsedAt  DateTime?
+  expiresAt   DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([tokenHash])
+}
+
+model Webhook {
+  id              String            @id @default(uuid())
+  workspaceId     String
+  url             String
+  secretEncrypted String
+  events          Json              // string[]
+  active          Boolean           @default(true)
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  workspace       Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  deliveries      WebhookDelivery[]
+
+  @@index([workspaceId])
+}
+
+model WebhookDelivery {
+  id           String    @id @default(uuid())
+  webhookId    String
+  event        String
+  payload      Json
+  statusCode   Int?
+  responseBody String?
+  attempts     Int       @default(1)
+  nextRetryAt  DateTime?
+  createdAt    DateTime  @default(now())
+
+  webhook      Webhook   @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+
+  @@index([webhookId])
+}
+
+model Integration {
+  id              String    @id @default(uuid())
+  workspaceId     String
+  type            String    // "github" | "slack" | "discord" | "telegram"
+  configEncrypted String
+  active          Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+}
+
+// ---------------------------------------------------
+// Cloud Build (V2)
+// ---------------------------------------------------
+
+model CloudBuild {
+  id          String           @id @default(uuid())
+  appId       String
+  repo        String
+  ref         String           // git branch or commit sha
+  profile     String           // "production" | "preview"
+  status      CloudBuildStatus @default(queued)
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  minutesUsed Int              @default(0)
+  logKey      String?
+  createdAt   DateTime         @default(now())
+
+  app         App              @relation(fields: [appId], references: [id], onDelete: Cascade)
+
+  @@index([appId])
+  @@index([status])
+}
+
+model BuildEnvVar {
+  id             String   @id @default(uuid())
+  appId          String
+  key            String
+  valueEncrypted String
+  createdAt      DateTime @default(now())
+
+  app            App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+
+  @@unique([appId, key])
+  @@index([appId])
+}
+
+model Keystore {
+  id                String   @id @default(uuid())
+  appId             String
+  alias             String
+  certDataEncrypted String
+  passwordEncrypted String
+  createdAt         DateTime @default(now())
+
+  app               App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+
+  @@index([appId])
+}
+
+// ---------------------------------------------------
+// Billing & Plans
+// ---------------------------------------------------
+
+model Plan {
+  id                    String        @id // "free" | "pro" | "team" | "enterprise"
+  name                  String
+  slug                  String        @unique
+  priceMonthly          Int           // in cents or paise
+  priceYearly           Int
+  storageBytesLimit     BigInt        // e.g. 5GB = 5368709120
+  bandwidthBytesLimit   BigInt        // e.g. 50GB
+  buildMinutesLimit     Int           // e.g. 120 min
+  maxApps               Int           @default(5)
+  maxTeamMembers        Int           @default(3)
+  customChannelsAllowed Boolean       @default(false)
+  createdAt             DateTime      @default(now())
+
+  workspaces            Workspace[]
+  subscriptions         Subscription[]
+}
+
+model Subscription {
+  id             String             @id @default(uuid())
+  workspaceId    String             @unique
+  planId         String
+  provider       PaymentProvider    @default(stripe)
+  providerSubId  String             @unique
+  status         SubscriptionStatus @default(active)
+  periodEnd      DateTime
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  workspace      Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  plan           Plan               @relation(fields: [planId], references: [id])
+
+  @@index([workspaceId])
+}
+
+model Invoice {
+  id          String    @id @default(uuid())
+  workspaceId String
+  number      String    @unique
+  amount      Int       // cents or paise
+  currency    String    @default("usd")
+  status      String    @default("paid")
+  invoiceUrl  String?
+  pdfKey      String?
+  createdAt   DateTime  @default(now())
+
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+}
+
+model BillingDetail {
+  id          String    @id @default(uuid())
+  workspaceId String    @unique
+  gstin       String?
+  companyName String?
+  address     String?
+  taxId       String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+model UsageRecord {
+  id             String    @id @default(uuid())
+  workspaceId    String
+  storageBytes   BigInt    @default(0)
+  bandwidthBytes BigInt    @default(0)
+  buildMinutes   Int       @default(0)
+  recordedAt     DateTime  @default(now())
+
+  workspace      Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, recordedAt])
+}
+
+model Coupon {
+  id              String    @id @default(uuid())
+  code            String    @unique
+  discountPercent Int
+  maxRedemptions  Int       @default(100)
+  redeemedCount   Int       @default(0)
+  validUntil      DateTime?
+  active          Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+
+  @@index([code])
+}
+
+// ---------------------------------------------------
+// Trust, Safety, Admin & Compliance
+// ---------------------------------------------------
+
+model AbuseReport {
+  id             String            @id @default(uuid())
+  appId          String
+  reason         String
+  details        String?
+  reporterEmail  String?
+  reporterIpHash String
+  status         AbuseReportStatus @default(pending)
+  resolvedById   String?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  app            App               @relation(fields: [appId], references: [id], onDelete: Cascade)
+
+  @@index([appId])
+  @@index([status])
+}
+
+model DmcaRequest {
+  id                   String     @id @default(uuid())
+  appId                String
+  claimantName         String
+  claimantEmail        String
+  infringementDetails  String
+  status               DmcaStatus @default(pending)
+  createdAt            DateTime   @default(now())
+  updatedAt            DateTime   @updatedAt
+
+  app                  App        @relation(fields: [appId], references: [id], onDelete: Cascade)
+
+  @@index([appId])
+  @@index([status])
+}
+
+model Blocklist {
+  id        String        @id @default(uuid())
+  type      BlocklistType
+  value     String        // SHA256 / package name / domain / IP
+  reason    String
+  createdAt DateTime      @default(now())
+
+  @@unique([type, value])
+  @@index([type, value])
+}
+
+model AuditLog {
+  id          String    @id @default(uuid())
+  workspaceId String
+  actorId     String
+  action      String    // e.g. "build.upload", "channel.promote", "member.invite"
+  targetType  String?
+  targetId    String?
+  metadata    Json?
+  ipHash      String?
+  createdAt   DateTime  @default(now())
+
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
+  @@index([actorId])
+}
+
+model FeatureFlag {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  description String?
+  enabled     Boolean  @default(false)
+  rules       Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Announcement {
+  id        String    @id @default(uuid())
+  title     String
+  content   String
+  type      String    @default("info")
+  active    Boolean   @default(true)
+  expiresAt DateTime?
+  createdAt DateTime  @default(now())
+}
+
+// ---------------------------------------------------
+// Notifications & Communications
+// ---------------------------------------------------
+
+model Notification {
+  id        String    @id @default(uuid())
+  userId    String
+  category  String    // "build" | "security" | "team" | "billing"
+  title     String
+  body      String
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+}
+
+model NotificationPref {
+  id        String   @id @default(uuid())
+  userId    String
+  category  String
+  inApp     Boolean  @default(true)
+  email     Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, category])
+  @@index([userId])
+}
+
+model SupportTicket {
+  id        String       @id @default(uuid())
+  userId    String?
+  email     String
+  subject   String
+  message   String
+  status    TicketStatus @default(open)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  user      User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([status])
+  @@index([email])
+}
+
+model ContactMessage {
+  id        String   @id @default(uuid())
+  name      String
+  email     String
+  subject   String
+  message   String
+  createdAt DateTime @default(now())
+}
+
+model NewsletterSubscriber {
+  id          String    @id @default(uuid())
+  email       String    @unique
+  status      String    @default("active") // "pending" | "active" | "unsubscribed"
+  confirmedAt DateTime?
+  createdAt   DateTime  @default(now())
+}
+
+model IdempotencyKey {
+  id           String   @id @default(uuid())
+  key          String   @unique
+  userId       String?
+  path         String
+  responseCode Int
+  responseBody Json
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  @@index([key])
+}
